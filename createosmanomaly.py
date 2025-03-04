@@ -1,492 +1,462 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+创建OSM异常检测模块
+
+本模块使用训练好的Mask R-CNN模型检测卫星图像中的运动场，
+并将检测到的但在OSM中缺失的运动场保存为OSM文件，以供后续审查。
+
+"""
+
 import sys
-sys.path.append("Mask_RCNN")
+sys.path.append("Mask_RCNN")  # 添加Mask_RCNN库到Python路径
 
 import os
 import sys
 import glob
-import osmmodelconfig
+import osmmodelconfig  # OSM模型配置
 import skimage
 import math
-import imagestoosm.config as osmcfg
-import model as modellib
-import visualize as vis
+import imagestoosm.config as osmcfg  # 项目配置
+import model as modellib  # Mask R-CNN模型
+import visualize as vis  # 可视化工具
 import numpy as np
 import csv
-import QuadKey.quadkey as quadkey
-import shapely.geometry as geometry
-import shapely.affinity as affinity
-import matplotlib.pyplot as plt
-import cv2
-import scipy.optimize 
+import QuadKey.quadkey as quadkey  # 地图瓦片坐标转换
+import shapely.geometry as geometry  # 几何处理
+import shapely.affinity as affinity  # 几何变换
+import matplotlib.pyplot as plt  # 绘图
+import cv2  # 计算机视觉库
+import scipy.optimize  # 优化算法
 import time
 from skimage import draw
 from skimage import io
 
+# 是否显示图形界面
 showFigures = False
 
 def toDegrees(rad):
-  return rad * 180/math.pi
+    """
+    将弧度转换为角度。
+    
+    参数:
+        rad (float): 弧度值
+        
+    返回:
+        float: 角度值
+    """
+    return rad * 180/math.pi
 
-def writeOSM( osmFileName,featureName, simpleContour,tilePixel, qkRoot) :
-    with open(osmFileName,"wt",encoding="ascii") as f: 
+def writeOSM(osmFileName, featureName, simpleContour, tilePixel, qkRoot):
+    """
+    将检测到的运动场写入OSM文件。
+    
+    参数:
+        osmFileName (str): 输出OSM文件名
+        featureName (str): 特征类型（如baseball, tennis等）
+        simpleContour (numpy.ndarray): 轮廓点
+        tilePixel (tuple): 瓦片像素坐标
+        qkRoot (QuadKey): 四叉树键根节点
+    """
+    with open(osmFileName, "wt", encoding="ascii") as f: 
         f.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
         f.write("<osm version=\"0.6\">\n")
         id = -1
-        for pt in simpleContour :
-            geo = quadkey.TileSystem.pixel_to_geo( (pt[0,0]+tilePixel[0],pt[0,1]+tilePixel[1]),qkRoot.level)
-            f.write("  <node id=\"{}\" lat=\"{}\" lon=\"{}\" />\n".format(id,geo[0],geo[1]))
+        # 写入节点
+        for pt in simpleContour:
+            # 将像素坐标转换回地理坐标
+            geo = quadkey.TileSystem.pixel_to_geo((pt[0,0] + tilePixel[0], pt[0,1] + tilePixel[1]), qkRoot.level)
+            f.write("  <node id=\"{}\" lat=\"{}\" lon=\"{}\" />\n".format(id, geo[0], geo[1]))
             id -= 1
 
+        # 写入路径
         f.write("  <way id=\"{}\" visible=\"true\">\n".format(id))
         id = -1
-        for pt in simpleContour :
+        for pt in simpleContour:
             f.write("    <nd ref=\"{}\" />\n".format(id))
             id -= 1
+        # 闭合路径（连接回第一个点）
         f.write("    <nd ref=\"{}\" />\n".format(-1))
-        f.write("    <tag k=\"{}\" v=\"{}\" />\n".format("leisure","pitch"))
-        f.write("    <tag k=\"{}\" v=\"{}\" />\n".format("sport",featureName))
+        # 添加标签
+        f.write("    <tag k=\"{}\" v=\"{}\" />\n".format("leisure", "pitch"))
+        f.write("    <tag k=\"{}\" v=\"{}\" />\n".format("sport", featureName))
         f.write("  </way>\n")
 
         f.write("</osm>\n")   
         f.close             
 
-def writeShape(wayNumber, finalShape, image, bbTop,bbHeight,bbLeft,bbWidth) :
+def writeShape(wayNumber, finalShape, image, bbTop, bbHeight, bbLeft, bbWidth):
+    """
+    将拟合的形状写入文件并返回下一个可用的路径编号。
+    
+    参数:
+        wayNumber (int): 当前路径编号
+        finalShape (shapely.geometry): 最终形状
+        image (numpy.ndarray): 图像数据
+        bbTop, bbHeight, bbLeft, bbWidth (int): 边界框参数
+        
+    返回:
+        int: 下一个可用的路径编号
+    """
+    # 限制点的数量
     nPts = int(finalShape.length)
-    if ( nPts > 5000) :
+    if (nPts > 5000):
         nPts = 5000
-    fitContour = np.zeros((nPts,1,2), dtype=np.int32)
+    fitContour = np.zeros((nPts, 1, 2), dtype=np.int32)
 
-    if ( nPts > 3):
-
-        for t in range(0,nPts) :
+    if (nPts > 3):
+        # 从形状中提取点
+        for t in range(0, nPts):
             pt = finalShape.interpolate(t)
-            fitContour[t,0,0] = pt.x
-            fitContour[t,0,1] = pt.y
+            fitContour[t, 0, 0] = pt.x
+            fitContour[t, 0, 1] = pt.y
             
-        fitContour = [ fitContour ]
-        fitContour = [ cv2.approxPolyDP(cnt,2,True) for cnt in fitContour]
+        # 简化轮廓
+        fitContour = [fitContour]
+        fitContour = [cv2.approxPolyDP(cnt, 2, True) for cnt in fitContour]
                         
+        # 在图像上绘制轮廓
         image = np.copy(imageNoMasks)
-        cv2.drawContours(image, fitContour,-1, (0,255,0), 2)
-        if ( showFigures ):
-            fig.add_subplot(2,2,3)
+        cv2.drawContours(image, fitContour, -1, (0, 255, 0), 2)
+        if (showFigures):
+            fig.add_subplot(2, 2, 3)
             plt.title(featureName + " " + str(r['scores'][i]) + " Fit")
-            plt.imshow(image[bbTop:bbTop+bbHeight,bbLeft:bbLeft+bbWidth])
+            plt.imshow(image[bbTop:bbTop+bbHeight, bbLeft:bbLeft+bbWidth])
 
-        while ( os.path.exists( "anomaly/add/{0:06d}.osm".format(wayNumber) )) :
+        # 查找可用的文件名
+        while (os.path.exists("anomaly/add/{0:06d}.osm".format(wayNumber))):
             wayNumber += 1
 
-        debugFileName = os.path.join( inference_config.ROOT_DIR, "anomaly","add","{0:06d}.jpg".format(wayNumber))
-        io.imsave(debugFileName,image[bbTop:bbTop+bbHeight,bbLeft:bbLeft+bbWidth],quality=100)
+        # 保存调试图像
+        debugFileName = os.path.join(inference_config.ROOT_DIR, "anomaly", "add", "{0:06d}.jpg".format(wayNumber))
+        io.imsave(debugFileName, image[bbTop:bbTop+bbHeight, bbLeft:bbLeft+bbWidth], quality=100)
 
-        osmFileName = os.path.join( inference_config.ROOT_DIR, "anomaly","add","{0:06d}.osm".format(wayNumber))
-        writeOSM( osmFileName,featureName, fitContour[0],tilePixel, qkRoot)
+        # 保存OSM文件
+        osmFileName = os.path.join(inference_config.ROOT_DIR, "anomaly", "add", "{0:06d}.osm".format(wayNumber))
+        writeOSM(osmFileName, featureName, fitContour[0], tilePixel, qkRoot)
 
-    if (showFigures ):
+    # 显示图形（如果启用）
+    if (showFigures):
         plt.show(block=False)
         plt.pause(0.05)
 
     return wayNumber
-    
 
+# 确保异常目录存在
+if (os.path.exists("anomaly") == False):
+    os.mkdir("anomaly")
 
-ROOT_DIR_ = os.path.dirname(os.path.realpath(sys.argv[0]))
-MODEL_DIR = os.path.join(ROOT_DIR_, "logs")
+if (os.path.exists("anomaly/add") == False):
+    os.mkdir("anomaly/add")
 
-class InferenceConfig(osmmodelconfig.OsmModelConfig):
-    GPU_COUNT = 1
-    IMAGES_PER_GPU = 1
-    ROOT_DIR = ROOT_DIR_
+# 初始化模型配置
+ROOT_DIR = os.getcwd()
+MODEL_DIR = os.path.join(ROOT_DIR, "logs")
 
-inference_config = InferenceConfig()
-
-fullTrainingDir = os.path.join( ROOT_DIR_, osmcfg.trainDir,"*")
-fullImageList = []
-for imageDir in glob.glob(fullTrainingDir): 
-    if ( os.path.isdir( os.path.join( fullTrainingDir, imageDir) )):
-        id = os.path.split(imageDir)[1]
-        fullImageList.append( id)
-
-# Training dataset
-dataset_full =  osmmodelconfig.OsmImagesDataset(ROOT_DIR_)
-dataset_full.load(fullImageList, inference_config.IMAGE_SHAPE[0], inference_config.IMAGE_SHAPE[1])
-dataset_full.prepare()
-
+# 创建推理配置
+inference_config = osmmodelconfig.OsmModelConfig()
+inference_config.ROOT_DIR = ROOT_DIR
+inference_config.GPU_COUNT = 1
+inference_config.IMAGES_PER_GPU = 1
+inference_config.DETECTION_MIN_CONFIDENCE = 0.9
 inference_config.display()
 
-# Recreate the model in inference mode
+# 创建模型对象
 model = modellib.MaskRCNN(mode="inference", 
                           config=inference_config,
                           model_dir=MODEL_DIR)
 
-# Get path to saved weights
-# Either set a specific path or find last trained weights
-# model_path = os.path.join(ROOT_DIR, ".h5 file name here")
+# 加载最新的模型权重
 model_path = model.find_last()[1]
-print(model_path)
-
-# Load trained weights (fill in path to trained weights here)
-assert model_path != "", "Provide path to trained weights"
-print("Loading weights from ", model_path)
+print("加载权重 ", model_path)
 model.load_weights(model_path, by_name=True)
 
+# 获取类别名称
+class_names = []
+for feature in osmmodelconfig.featureNames:
+    class_names.append(feature)
 
-print("Reading in OSM data")
-# load up the OSM features into hash of arrays of polygons, in pixels
-features = {}
+# 创建图形窗口（如果启用）
+if (showFigures):
+    fig = plt.figure(figsize=(12, 12))
 
-for classDir in os.listdir(osmcfg.rootOsmDir) :
-    classDirFull = os.path.join( osmcfg.rootOsmDir,classDir)
-    for fileName in os.listdir(classDirFull) :
-        fullPath = os.path.join( osmcfg.rootOsmDir,classDir,fileName)
-        with open(fullPath, "rt") as csvfile:
-            csveader = csv.reader(csvfile, delimiter='\t')
+# 初始化路径编号
+wayNumber = 1
 
+# 遍历所有瓦片文件
+for root, subFolders, files in os.walk(osmcfg.rootTileDir):
+    for file in files:
+        # 只处理JPG文件
+        if (file.endswith(".jpg")):
+            # 从文件名获取四叉树键
+            quadKeyStr = os.path.splitext(file)[0]
+            qkRoot = quadkey.from_str(quadKeyStr)
+            
+            # 获取瓦片的像素坐标
+            tilePixel = quadkey.TileSystem.geo_to_pixel(qkRoot.to_geo(), qkRoot.level)
+            
+            # 获取瓦片的地理坐标
+            geo = qkRoot.to_geo()
+            
+            # 创建图像边界框多边形
             pts = []
-            for row in csveader:
-                latLot = (float(row[0]),float(row[1]))
-                pixel = quadkey.TileSystem.geo_to_pixel(latLot,osmcfg.tileZoom)
-
-                pts.append(pixel)
-
-            feature = {
-                "geometry" : geometry.Polygon(pts),
-                "filename" : fullPath
-            }
-
-
-            if ( (classDir in features) == False) :
-                features[classDir] = []
-
-            features[classDir].append( feature )
-
-
-# make the output dirs, a fresh start is possible just by deleting anomaly
-if ( not os.path.isdir("anomaly")) :
-    os.mkdir("anomaly")
-if ( not os.path.isdir("anomaly/add")) :
-    os.mkdir("anomaly/add")
-if ( not os.path.isdir("anomaly/replace")) :
-    os.mkdir("anomaly/replace")
-if ( not os.path.isdir("anomaly/overlap")) :
-    os.mkdir("anomaly/overlap")
-
-fig = {}
-if ( showFigures):
-    fig = plt.figure()
-
-wayNumber = 0
-
-startTime = time.time()
-
-count = 1
-for image_index in dataset_full.image_ids :
-    currentTime = time.time()
-    howLong = currentTime-startTime
-    secPerImage = howLong/count
-    imagesLeft = len(dataset_full.image_ids)-count
-    timeLeftHrs = (imagesLeft*secPerImage)/3600.0
-
-    print("Processing {} of {} {:2.1f} hrs left".format(count,len(dataset_full.image_ids),timeLeftHrs))
-    count += 1
-
-    image, image_meta, gt_class_id, gt_bbox, gt_mask = modellib.load_image_gt(dataset_full, inference_config,image_index, use_mini_mask=False)
-    info = dataset_full.image_info[image_index]
-
-    # get the pixel location for this training image.
-    metaFileName = os.path.join( inference_config.ROOT_DIR, osmcfg.trainDir,info['id'],info['id']+".txt")
-
-    quadKeyStr = ""
-    with open(metaFileName) as metafile:  
-        quadKeyStr = metafile.readline()
-
-    quadKeyStr = quadKeyStr.strip()
-    qkRoot = quadkey.from_str(quadKeyStr)
-    tilePixel = quadkey.TileSystem.geo_to_pixel(qkRoot.to_geo(), qkRoot.level)
-
-    # run the network
-    results = model.detect([image], verbose=0)
-    r = results[0]
-
-    maxImageSize = 256*3
-    featureMask = np.zeros((maxImageSize, maxImageSize), dtype=np.uint8)
-
-    pts = []
-    pts.append( ( tilePixel[0]+0,tilePixel[1]+0 ) )
-    pts.append( ( tilePixel[0]+0,tilePixel[1]+maxImageSize ) )
-    pts.append( ( tilePixel[0]+maxImageSize,tilePixel[1]+maxImageSize ) )
-    pts.append( ( tilePixel[0]+maxImageSize,tilePixel[1]+0 ) )
-    
-    imageBoundingBoxPoly = geometry.Polygon(pts)
-
-    foundFeatures = {}
-
-    for featureType in osmmodelconfig.featureNames.keys() :
-        foundFeatures[featureType ] = []
-
-        for feature in features[featureType] :            
-            if ( imageBoundingBoxPoly.intersects( feature['geometry']) ) :
-
-                xs, ys = feature['geometry'].exterior.coords.xy
-
-                outOfRangeCount = len([ x for x in xs if x < tilePixel[0] or x >= tilePixel[0]+maxImageSize ])
-                outOfRangeCount += len([ y for y in ys if y < tilePixel[1] or y >= tilePixel[1]+maxImageSize ])
-
-                if ( outOfRangeCount == 0) :
-                    foundFeatures[featureType ].append( feature)
-
-    # draw black lines showing where osm data is
-    for featureType in osmmodelconfig.featureNames.keys() :
-        for feature in foundFeatures[featureType] :
-            xs, ys = feature['geometry'].exterior.coords.xy
-
-            xs = [ x-tilePixel[0] for x in xs]
-            ys = [ y-tilePixel[1] for y in ys]
-
-            rr, cc = draw.polygon_perimeter(xs,ys,(maxImageSize,maxImageSize))
-            image[cc,rr] = 0
-
-    imageNoMasks = np.copy(image)
-
-    for i in range( len(r['class_ids']))  :
-        mask = r['masks'][:,:,i]
-        edgePixels = 15
-        outside = np.sum( mask[0:edgePixels,:]) + np.sum( mask[-edgePixels:-1,:]) + np.sum( mask[:,0:edgePixels]) + np.sum( mask[:,-edgePixels:-1])
-
-        image = np.copy(imageNoMasks)
-
-        if ( r['scores'][i] > 0.98 and outside == 0 ) :
-            featureFound = False
-            for featureType in osmmodelconfig.featureNames.keys() :
-                for feature in foundFeatures[featureType] :
-                    classId = osmmodelconfig.featureNames[featureType]
-                
-                    if ( classId == r['class_ids'][i]  ) :
-
-                        xs, ys = feature['geometry'].exterior.coords.xy
-
-                        xs = [ x-tilePixel[0] for x in xs]
-                        ys = [ y-tilePixel[1] for y in ys]
-        
-                        xsClipped = [ min( max( x,0),maxImageSize) for x in xs]
-                        ysClipped = [ min( max( y,0),maxImageSize) for y in ys]
-
-                        featureMask.fill(0)
-                        rr, cc = draw.polygon(xs,ys,(maxImageSize,maxImageSize))
-                        featureMask[cc,rr] = 1
-
-                        maskAnd = featureMask * mask
-                        overlap = np.sum(maskAnd )
-
-                        if ( outside == 0 and overlap > 0) :
-                            featureFound = True
-
-            if ( featureFound == False) :
-                weight = 0.25
-
-                # get feature name
-                featureName = ""
-                for featureType in osmmodelconfig.featureNames.keys() :
-                    if ( osmmodelconfig.featureNames[featureType] == r['class_ids'][i]  ) :
-                        featureName = featureType
-
-                #if ( r['class_ids'][i] == 1):
-                #    vis.apply_mask(image,mask,[weight,0,0])
-                #if (  r['class_ids'][i] == 2):
-                #    vis.apply_mask(image,mask,[weight,weight,0])
-                #if (  r['class_ids'][i] == 3):
-                #    vis.apply_mask(image,mask,[0.0,0,weight])
-
-                mask = mask.astype(np.uint8)
-                mask = mask * 255
- 
-                ret,thresh = cv2.threshold(mask,127,255,0)
-                im2, rawContours,h = cv2.findContours(thresh,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
-
-                bbLeft,bbTop,bbWidth,bbHeight = cv2.boundingRect(rawContours[0])                
-                
-                bbBuffer = 75
-
-                bbLeft = max(bbLeft-bbBuffer,0)
-                bbRight = min(bbLeft+2*bbBuffer+bbWidth,maxImageSize)
-                bbWidth = bbRight-bbLeft
-
-                bbTop = max(bbTop-bbBuffer,0)
-                bbBottom = min(bbTop+2*bbBuffer+bbHeight,maxImageSize-1)
-                bbHeight = bbBottom-bbTop
-
-                image = np.copy(imageNoMasks)
-                cv2.drawContours(image, rawContours,-1, (0,255,0), 2)
-
-                if ( showFigures ):
-                    fig.add_subplot(2,2,1)
-                    plt.title(featureName + " " + str(r['scores'][i]) + " Raw")
-                    plt.imshow(image[bbTop:bbTop+bbHeight,bbLeft:bbLeft+bbWidth])
-                
-                simpleContour = [ cv2.approxPolyDP(cnt,5,True) for cnt in rawContours]
-                image = np.copy(imageNoMasks)
-                cv2.drawContours(image, simpleContour,-1, (0,255,0), 2)
-                if ( showFigures ):
-                    fig.add_subplot(2,2,2)
-                    plt.title(featureName + " " + str(r['scores'][i]) + " Simplify")
-                    plt.imshow(image[bbTop:bbTop+bbHeight,bbLeft:bbLeft+bbWidth])
-
-                simpleContour = simpleContour[0]
-                
-                print("  {}".format(featureName))
-                if ( featureName == "baseball" and isinstance(simpleContour,np.ndarray) ):
+            pts.append((tilePixel[0] + 0, tilePixel[1] + 0))
+            pts.append((tilePixel[0] + 0, tilePixel[1] + 256))
+            pts.append((tilePixel[0] + 256, tilePixel[1] + 256))
+            pts.append((tilePixel[0] + 256, tilePixel[1] + 0))
+            
+            imageBoundingBoxPoly = geometry.Polygon(pts)
+            
+            # 检查是否有任何已知的特征与此瓦片相交
+            skipTile = False
+            for featureType in osmmodelconfig.featureNames:
+                # 跳过不存在的特征类型目录
+                if (os.path.exists(os.path.join(osmcfg.rootOsmDir, featureType)) == False):
+                    continue
                     
-                    while ( os.path.exists( "anomaly/add/{0:06d}.osm".format(wayNumber) )) :
-                        wayNumber += 1
-
-                    debugFileName = os.path.join( inference_config.ROOT_DIR, "anomaly","add","{0:06d}.jpg".format(wayNumber))
-                    io.imsave(debugFileName,image[bbTop:bbTop+bbHeight,bbLeft:bbLeft+bbWidth],quality=100)
-
-                    osmFileName = os.path.join( inference_config.ROOT_DIR, "anomaly","add","{0:06d}.osm".format(wayNumber))
-                    writeOSM( osmFileName,featureName, simpleContour,tilePixel, qkRoot)
-
-                fitContour = simpleContour
-
-                if ( featureName == 'baseball' ) :
-
-                    def makePie(paramsX):
-                        centerX,centerY,width,angle = paramsX
-
-                        pts = []
-
-                        pts.append((0,0))
-                        pts.append((width,0))
-
-                        step =  math.pi/10
-                        r = step
-                        while r < math.pi/2:
-                            x = math.cos(r)*width
-                            y = math.sin(r)*width
-                            pts.append( (x,y) )
-                            r += step
-
-                        pts.append( (0,width))
-                        pts.append( (0,0))
-
-                        fitShape = geometry.LineString(pts)
-
-                        fitShape = affinity.translate(fitShape, -width/2,-width/2 )
-                        fitShape = affinity.rotate(fitShape,angle )
-                        fitShape = affinity.translate(fitShape, centerX,centerY )
-
-                        return fitShape
-
-                    def fitPie(paramsX):
-                        fitShape = makePie(paramsX)
-
-                        huberCutoff = 5
-
-                        sum = 0
-                        for cnt in rawContours:
-                            for pt in cnt:
-                                p = geometry.Point(pt[0])
-                                d = p.distance(fitShape)
-
-                                if ( d < huberCutoff) :
-                                    sum += 0.5 * d * d
-                                else:
-                                    sum += huberCutoff*(math.fabs(d)-0.5*huberCutoff)
-
-                        return sum
-                    
-                    cm = np.mean( rawContours[0],axis=0)
-
-                    results = []
-                    angleStepCount = 8
-                    for angleI in range(angleStepCount):
+                classDirFull = os.path.join(osmcfg.rootOsmDir, featureType)
+                for fileName in os.listdir(classDirFull):
+                    fullPath = os.path.join(osmcfg.rootOsmDir, featureType, fileName)
+                    with open(fullPath, "rt") as csvfile:
+                        csveader = csv.reader(csvfile, delimiter='\t')
                         
-                        centerX = cm[0,0]
-                        centerY = cm[0,1]
-                        width = math.sqrt(cv2.contourArea(rawContours[0]))
-                        angle = 360 * float(angleI)/angleStepCount
-                        x0 = np.array([centerX,centerY,width,angle ])
-                                                
-                        resultR = scipy.optimize.minimize(fitPie, x0, method='nelder-mead', options={'xtol': 1e-6,'maxiter':50 })
-
-                        results.append(resultR)
-
-                    bestScore = 1e100
-                    bestResult = {}
-                    for result in results:
-                        if result.fun < bestScore :
-                            bestScore  = result.fun
-                            bestResult = result
-
-                    bestResult = scipy.optimize.minimize(fitPie, bestResult.x, method='nelder-mead', options={'xtol': 1e-6 })
-                    finalShape = makePie(bestResult.x)
-                    wayNumber = writeShape(wayNumber, finalShape, image, bbTop,bbHeight,bbLeft,bbWidth) 
-
-                    for result in results:
-                        angle = result.x[3]
-                        angleDelta = int(math.fabs(result.x[3]-bestResult.x[3])) % 360
-                        if result.fun < 1.2*bestScore and angleDelta > 45  :
-                            result = scipy.optimize.minimize(fitPie, result.x, method='nelder-mead', options={'xtol': 1e-6 })
-                            finalShape = makePie(result.x)
-                            wayNumber = writeShape(wayNumber, finalShape, image, bbTop,bbHeight,bbLeft,bbWidth) 
-
-                else:
-
-                    def makeRect(paramsX):
-                        centerX,centerY,width,height,angle = paramsX
-
-                        pts = [ 
-                            (-width/2,height/2),
-                            (width/2,height/2),
-                            (width/2,-height/2),
-                            (-width/2,-height/2),
-                            (-width/2,height/2)]
-
-                        fitShape = geometry.LineString(pts)
-
-                        fitShape = affinity.rotate(fitShape, angle,use_radians=True )
-                        fitShape = affinity.translate(fitShape, centerX,centerY )
-
-                        return fitShape
-
-                    def fitRect(paramsX):
-                        fitShape = makeRect(paramsX)
-
-                        sum = 0
-
-                        for cnt in rawContours:
-                            for pt in cnt:
-                                p = geometry.Point(pt[0])
-                                d = p.distance(fitShape)
-                                sum += d*d
-                        return sum
-
-                    cm = np.mean( rawContours[0],axis=0)
-
-                    result = {}
-                    angleStepCount = 8
-                    for angleI in range(angleStepCount):
-
-                        centerX = cm[0,0]
-                        centerY = cm[0,1]
-                        width = math.sqrt(cv2.contourArea(rawContours[0]))
-                        height = width
-                        angle = 2*math.pi * float(angleI)/angleStepCount
-                        x0 = np.array([centerX,centerY,width,height,angle ])
-                        resultR = scipy.optimize.minimize(fitRect, x0, method='nelder-mead', options={'xtol': 1e-6,'maxiter':50 })
-
-                        if ( angleI == 0):                            
-                            result = resultR
-
-                        if ( resultR.fun < result.fun):
-                            result = resultR
-                        #print("{} {}".format(angle * 180.0 / math.pi,resultR.fun ))
-
-                    resultR = scipy.optimize.minimize(fitRect, resultR.x, method='nelder-mead', options={'xtol': 1e-6 })
-
-                    #print(result)
-                    finalShape = makeRect(result.x)
+                        # 收集所有点的坐标
+                        pts = []
+                        for row in csveader:
+                            latLot = (float(row[0]), float(row[1]))
+                            # 将地理坐标转换为像素坐标
+                            pixel = quadkey.TileSystem.geo_to_pixel(latLot, osmcfg.tileZoom)
+                            pts.append(pixel)
+                            
+                        # 创建多边形
+                        poly = geometry.Polygon(pts)
+                        
+                        # 如果已知特征与瓦片相交，跳过此瓦片
+                        if (imageBoundingBoxPoly.intersects(poly)):
+                            skipTile = True
+                            break
+                            
+                if (skipTile):
+                    break
+                    
+            if (skipTile):
+                continue
                 
-                    wayNumber = writeShape(wayNumber, finalShape, image, bbTop,bbHeight,bbLeft,bbWidth) 
+            # 读取瓦片图像
+            image = skimage.io.imread(os.path.join(root, file))
+            
+            # 保存无掩码的图像副本
+            imageNoMasks = np.copy(image)
+            
+            # 使用模型进行检测
+            results = model.detect([image], verbose=0)
+            r = results[0]
+            
+            # 显示检测结果（如果启用）
+            if (showFigures):
+                fig.add_subplot(2, 2, 1)
+                plt.title(quadKeyStr)
+                plt.imshow(image)
+                
+                fig.add_subplot(2, 2, 2)
+                plt.title("Detections")
+                vis.display_instances(image, r['rois'], r['masks'], r['class_ids'], 
+                                     class_names, r['scores'], ax=plt.gca())
+                
+            # 处理每个检测结果
+            for i in range(len(r['class_ids'])):
+                # 获取特征类型
+                featureType = class_names[r['class_ids'][i] - 1]
+                
+                # 获取边界框
+                y1, x1, y2, x2 = r['rois'][i]
+                bbTop = y1
+                bbHeight = y2 - y1
+                bbLeft = x1
+                bbWidth = x2 - x1
+                
+                # 获取掩码
+                mask = r['masks'][:, :, i]
+                
+                # 查找掩码轮廓
+                ret, thresh = cv2.threshold(mask.astype(np.uint8) * 255, 127, 255, 0)
+                rawContours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # 如果找到轮廓
+                if (len(rawContours) > 0):
+                    # 根据特征类型选择不同的形状拟合方法
+                    if (featureType == "baseball"):
+                        # 棒球场通常是圆形或椭圆形
+                        
+                        # 定义椭圆形状生成函数
+                        def makeEllipse(paramsX):
+                            """
+                            根据参数生成椭圆形状。
+                            
+                            参数:
+                                paramsX (list): [centerX, centerY, width, height, angle]
+                                
+                            返回:
+                                shapely.geometry: 椭圆形状
+                            """
+                            centerX = paramsX[0]
+                            centerY = paramsX[1]
+                            width = abs(paramsX[2])
+                            height = abs(paramsX[3])
+                            angle = paramsX[4]
+                            
+                            # 创建椭圆点
+                            nPts = 24
+                            pts = []
+                            for i in range(nPts):
+                                theta = i * 2 * math.pi / nPts
+                                x = width/2 * math.cos(theta)
+                                y = height/2 * math.sin(theta)
+                                pts.append((x, y))
+                                
+                            # 创建形状并应用变换
+                            fitShape = geometry.LinearRing(pts)
+                            fitShape = affinity.rotate(fitShape, angle, use_radians=True)
+                            fitShape = affinity.translate(fitShape, centerX, centerY)
+                            
+                            return fitShape
+                            
+                        # 定义椭圆拟合误差函数
+                        def fitEllipse(paramsX):
+                            """
+                            计算椭圆拟合误差。
+                            
+                            参数:
+                                paramsX (list): 椭圆参数
+                                
+                            返回:
+                                float: 拟合误差
+                            """
+                            fitShape = makeEllipse(paramsX)
+                            
+                            sum = 0
+                            # 计算轮廓点到椭圆的距离平方和
+                            for cnt in rawContours:
+                                for pt in cnt:
+                                    p = geometry.Point(pt[0])
+                                    d = p.distance(fitShape)
+                                    sum += d*d
+                            return sum
+                            
+                        # 计算轮廓的中心点
+                        cm = np.mean(rawContours[0], axis=0)
+                        
+                        # 尝试不同的初始角度，找到最佳拟合
+                        result = {}
+                        angleStepCount = 8
+                        for angleI in range(angleStepCount):
+                            centerX = cm[0, 0]
+                            centerY = cm[0, 1]
+                            width = math.sqrt(cv2.contourArea(rawContours[0]))
+                            height = width
+                            angle = 2*math.pi * float(angleI)/angleStepCount
+                            x0 = np.array([centerX, centerY, width, height, angle])
+                            resultE = scipy.optimize.minimize(fitEllipse, x0, method='nelder-mead', options={'xtol': 1e-6, 'maxiter': 50})
+                            
+                            if (angleI == 0):                            
+                                result = resultE
+                                
+                            if (resultE.fun < result.fun):
+                                result = resultE
+                                
+                        # 进一步优化最佳结果
+                        resultE = scipy.optimize.minimize(fitEllipse, result.x, method='nelder-mead', options={'xtol': 1e-6})
+                        
+                        # 创建最终椭圆形状
+                        finalShape = makeEllipse(result.x)
+                        
+                        # 写入形状并更新路径编号
+                        wayNumber = writeShape(wayNumber, finalShape, image, bbTop, bbHeight, bbLeft, bbWidth)
+                        
+                    elif (featureType == "basketball" or featureType == "tennis"):
+                        # 篮球场和网球场通常是矩形
+                        
+                        # 定义矩形形状生成函数
+                        def makeRect(paramsX):
+                            """
+                            根据参数生成矩形形状。
+                            
+                            参数:
+                                paramsX (list): [centerX, centerY, width, height, angle]
+                                
+                            返回:
+                                shapely.geometry: 矩形形状
+                            """
+                            centerX = paramsX[0]
+                            centerY = paramsX[1]
+                            width = abs(paramsX[2])
+                            height = abs(paramsX[3])
+                            angle = paramsX[4]
+                            
+                            # 创建矩形点
+                            pts = [(width/2, -height/2),
+                                   (width/2, height/2),
+                                   (-width/2, height/2),
+                                   (-width/2, -height/2)]
+                                   
+                            # 创建形状并应用变换
+                            fitShape = geometry.LineString(pts)
+                            fitShape = affinity.rotate(fitShape, angle, use_radians=True)
+                            fitShape = affinity.translate(fitShape, centerX, centerY)
+                            
+                            return fitShape
+                            
+                        # 定义矩形拟合误差函数
+                        def fitRect(paramsX):
+                            """
+                            计算矩形拟合误差。
+                            
+                            参数:
+                                paramsX (list): 矩形参数
+                                
+                            返回:
+                                float: 拟合误差
+                            """
+                            fitShape = makeRect(paramsX)
+                            
+                            sum = 0
+                            # 计算轮廓点到矩形的距离平方和
+                            for cnt in rawContours:
+                                for pt in cnt:
+                                    p = geometry.Point(pt[0])
+                                    d = p.distance(fitShape)
+                                    sum += d*d
+                            return sum
+                            
+                        # 计算轮廓的中心点
+                        cm = np.mean(rawContours[0], axis=0)
+                        
+                        # 尝试不同的初始角度，找到最佳拟合
+                        result = {}
+                        angleStepCount = 8
+                        for angleI in range(angleStepCount):
+                            centerX = cm[0, 0]
+                            centerY = cm[0, 1]
+                            width = math.sqrt(cv2.contourArea(rawContours[0]))
+                            height = width
+                            angle = 2*math.pi * float(angleI)/angleStepCount
+                            x0 = np.array([centerX, centerY, width, height, angle])
+                            resultR = scipy.optimize.minimize(fitRect, x0, method='nelder-mead', options={'xtol': 1e-6, 'maxiter': 50})
+                            
+                            if (angleI == 0):                            
+                                result = resultR
+                                
+                            if (resultR.fun < result.fun):
+                                result = resultR
+                                
+                        # 进一步优化最佳结果
+                        resultR = scipy.optimize.minimize(fitRect, resultR.x, method='nelder-mead', options={'xtol': 1e-6})
+                        
+                        # 创建最终矩形形状
+                        finalShape = makeRect(result.x)
+                        
+                        # 写入形状并更新路径编号
+                        wayNumber = writeShape(wayNumber, finalShape, image, bbTop, bbHeight, bbLeft, bbWidth)
 
 
 

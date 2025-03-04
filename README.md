@@ -1,81 +1,79 @@
-# Images to OSM
-This project uses the Mask R-CNN algorithm to detect features in satellite images. The goal is to test the Mask R-CNN neural network algorithm and improve OpenStreetMap by adding high quality baseball, soccer, tennis, football, and basketball fields to the map.
+# 卫星图像到OSM
+本项目使用Mask R-CNN算法来检测卫星图像中的特征。目标是测试Mask R-CNN神经网络算法，并通过向地图添加高质量的棒球场、足球场、网球场、美式足球场和篮球场来改进OpenStreetMap。
 
-The [Mask R-CNN]([https://arxiv.org/abs/1703.06870) was published March 2017, by the [Facebook AI Research (FAIR)](https://research.fb.com/category/facebook-ai-research-fair/). 
+[Mask R-CNN](https://arxiv.org/abs/1703.06870)于2017年3月由[Facebook AI研究院(FAIR)](https://research.fb.com/category/facebook-ai-research-fair/)发布。
 
-This paper claims state of the art performance for detecting instance segmentation masks. The paper is an exciting result because "solving" the instance segmentation mask problem will benefit numerious practical applications outside of Facebook and OpenStreetMap.
+这篇论文声称在检测实例分割掩码方面达到了最先进的性能。这一论文结果令人兴奋，因为"解决"实例分割掩码问题将使Facebook和OpenStreetMap之外的许多实际应用受益。
 
-Using Mask R-CNN successfully on a new data set would be a good indication that the algorithm is generic enough to be applicable on many problems. However, the number of publicly available data sets with enough images to train this algorithm are limited because collecting and annotating data for 50,000+ images is expensive and time consuming. 
+在新数据集上成功使用Mask R-CNN将是该算法足够通用并适用于许多问题的良好指标。然而，公开可用的数据集中，具有足够图像来训练此算法的数量有限，因为收集和注释50,000多张图像的数据既昂贵又耗时。
 
-Microsoft's Bing satellite tiles, combined with the OpenStreetMap data, is a good source of segmentation mask data. The opportunity of working with a cutting edge AI algorithms and doing my favorite hobby (OSM) was too much to pass up. 
+微软的Bing卫星图像，结合OpenStreetMap数据，是分割掩码数据的良好来源。有机会使用前沿AI算法并从事我最喜欢的爱好(OSM)，这个机会实在太好了，无法错过。
 
-## Samples Images
+## 示例图像
 
-Mask R-CNN finding baseball, basketball, and tennis fields in Bing images.
+Mask R-CNN在Bing图像中找到棒球场、篮球场和网球场。
 
-![OSM Mask R-CNN sample 1](/sample-images/sample1.png)
-![OSM Mask R-CNN sample 2](/sample-images/sample2.png)
-![OSM Mask R-CNN sample 3](/sample-images/sample3.png)
+![OSM Mask R-CNN示例1](/sample-images/sample1.png)
+![OSM Mask R-CNN示例2](/sample-images/sample2.png)
+![OSM Mask R-CNN示例3](/sample-images/sample3.png)
 
-## Mask R-CNN Implementation
+## Mask R-CNN实现
 
-At this time (end of 2017), Facebook AI research has not yet released their implementation. [Matterport, Inc](https://matterport.com/) has graciously released a very nice python [implementation of Mask R-CNN](https://github.com/matterport/Mask_RCNN) on github using Keras and TensorFlow. This project is based on Matterport, Inc work.
+在当前时间(2017年底)，Facebook AI研究院尚未发布他们的实现。[Matterport, Inc](https://matterport.com/)已慷慨地在github上发布了一个非常好的使用Keras和TensorFlow的[Mask R-CNN实现](https://github.com/matterport/Mask_RCNN)。本项目基于Matterport, Inc的工作。
 
-## Why Sports Fields
+## 为什么选择运动场
 
-Sport fields are a good fit for the Mask R-CNN algorithm. 
+运动场非常适合Mask R-CNN算法。
 
-- They are visible in the satellite images regardless of the tree cover, unlike, say, buildings. 
-- They are "blob" shape and not a line shape, like a roads.
-- If successful, they are easy to conflate and import back into OSM, because they are isolated features.
+- 无论树木覆盖如何，它们都在卫星图像中可见，这与建筑物不同。
+- 它们是"斑点"形状而非线形状，如道路。
+- 如果成功，它们易于合并并导入回OSM，因为它们是孤立的特征。
 
-## Training with OSM
+## 使用OSM进行训练
 
-The stretch goal for this project is to train a neural network at human level performance and to completely map the sports fields in Massachusetts in OSM. Unfortunately the existing data in OSM is not of high enough quality to train any algorithm to human level performance.  The plan is to iteratively train, feed corrections back to OSM, and re-train, bootstrapping the algorithm and OSM together. Hopefully a virtuous circle between OSM and the algorithm will form until the algorithm is good as a human mapper.
+这个项目的延伸目标是训练一个达到人类级别性能的神经网络，并在OSM中完全绘制马萨诸塞州的运动场。不幸的是，OSM中现有的数据质量不足以训练任何算法达到人类级别的性能。计划是迭代训练，将修正反馈给OSM，然后重新训练，同时提升算法和OSM。希望OSM和算法之间能形成良性循环，直到算法变得与人类测绘者一样好。
 
-## Workflow
+## 工作流程
 
-The training workflow is in the trainall.py, which calls the following scripts in sequence.
+训练工作流程在trainall.py中，它按顺序调用以下脚本。
 
-1. getdatafromosm.py uses overpass to download the data for the sports fields.
-2. gettilesfrombing.py uses the OSM data to download the required Bing tiles. The script downloads the data slowly, please expect around 2 days to run the first time.
-3. maketrainingimages.py collects the OSM data, and the Bing tiles into a set of training images and masks. Expect 12 hours to run each time.
-4. train.py actually runs training for the Mask R-CNN algorithm. Expect that this will take 4 days to run on single GTX 1080 with 8GB of memory.
+1. getdatafromosm.py使用overpass下载运动场的数据。
+2. gettilesfrombing.py使用OSM数据下载所需的Bing图块。该脚本下载速度较慢，首次运行预计需要约2天时间。
+3. maketrainingimages.py收集OSM数据和Bing图块，生成一组训练图像和掩码。每次运行预计需要12小时。
+4. train.py实际运行Mask R-CNN算法的训练。在单个8GB内存的GTX 1080上运行预计需要4天时间。
 
-## Convert Results to OSM File
+## 将结果转换为OSM文件
 
-5. createosmanomaly.py runs the neural network over the training image set and suggests changes to OSM. 
+5. createosmanomaly.py在训练图像集上运行神经网络并建议对OSM进行更改。
 
-   This script converts the neural network output masks into the candidate OSM ways. It does this by fitting perfect rectangles to tennis and basketball mask boundaries. For baseball fields, the OSM ways are a fitted 90 degree wedges and the simplified masks boundary. The mask fitting is a nonlinear optimization problem and it is performed with a simplex optimizer using a robust Huber cost function. The simplex optimizer was used because I was too lazy code a partial derivative function. The boundary being fit is not a gaussian process, therefor the Huber cost function is a better choice than a standard least squared cost function. The unknown rotation of the features causes the fitting optimization to be highly non-convex. In English, the optimization gets stuck in local valleys if it is started far away from the optimal solution. This is handled by simply seeding the optimizer at several rotations and emitting all the high quality fits. A human using the reviewosmanomaly.py script sorts out which rotation is the right one. Hopefully as the neural network performance on baseball fields improves the alternate rotations can be removed.
+   此脚本将神经网络输出掩码转换为候选OSM路径。它通过将完美矩形拟合到网球场和篮球场掩码边界来实现这一点。对于棒球场，OSM路径是拟合的90度楔形和简化的掩码边界。掩码拟合是一个非线性优化问题，它使用simplex优化器和robust Huber成本函数执行。使用simplex优化器是因为我懒得编写偏导数函数。被拟合的边界不是高斯过程，因此Huber成本函数比标准最小二乘成本函数更好。特征的未知旋转导致拟合优化高度非凸。用通俗的话说，如果优化从最优解较远的地方开始，则会陷入局部谷底。这通过简单地在几个旋转处为优化器种子并输出所有高质量拟合来处理。使用reviewosmanomaly.py脚本的人类会排序出哪个旋转是正确的。希望随着神经网络在棒球场上的性能提高，可以移除这些替代旋转。
 
-   In order to hit the stretch goal, the training data from OSM will need to be pristine. The script will need to be extended to identify incorrectly tagged fields and fields that are poorly traced. For now, it simply identifies fields that are missing from OSM.
+   为了达到延伸目标，OSM的训练数据需要非常完美。脚本需要扩展以识别错误标记的场地和描绘不良的场地。目前，它只是识别OSM中缺失的场地。
 
-6. The reviewosmanomaly.py is run next to visually approve or reject the changes suggested in the anomaly directory. 
+6. 接下来运行reviewosmanomaly.py来视觉上批准或拒绝异常目录中建议的更改。
 
-    Note this is the only script that requires user interaction. The script clusters together suggestions from createosmanomaly.py and presents an gallery options. The the user visually inspects the image gallery and approves or reject changes suggested by createosmanomaly.py. The images shown are of the final way geometry over the Bing satellite images.
+    注意这是唯一需要用户交互的脚本。该脚本将createosmanomaly.py的建议聚集在一起并呈现一个选项库。然后用户视觉检查图像库并批准或拒绝createosmanomaly.py建议的更改。显示的图像是Bing卫星图像上的最终路径几何形状。
 
-7. The createfinalosm.py creates the final .osm files from the anomaly review done by reviewosmanomaly.py. It breaks up the files so that the final OSM file size is under the 10,000 element limit of the OSM API.
+7. createfinalosm.py从reviewosmanomaly.py完成的异常审查创建最终的.osm文件。它将文件分解，使最终OSM文件大小低于OSM API的10,000个元素限制。
 
-## Phase 1 - Notes ##
+## 第1阶段 - 注释 ##
 
-Phase 1 of the project is training the neural network directly off of the unimproved OSM data, and [importing missing fields](https://wiki.openstreetmap.org/wiki/US_Sports_Fields_Import_2018) from the training images back into OSM. About 2,800 missing fields were identified and will soon be imported 
-back into OSM.
+项目的第1阶段是直接利用未改进的OSM数据训练神经网络，并[导入缺失的场地](https://wiki.openstreetmap.org/wiki/US_Sports_Fields_Import_2018)从训练图像回到OSM。大约2,800个缺失的场地被识别出来，并将很快导入回OSM。
 
-For tennis and basketball courts the performance is quite good. The masks are rectangles with few
-false positives. Like a human mapper it has no problem handling clusters of tennis and basketball courts, rotations, occlusions from trees, and different colored pavement. It is close, but not quite at human performance. After the missing fields are imported into OSM, hopefully it will reach human level performance. 
+对于网球场和篮球场，性能相当好。掩码是矩形，几乎没有误报。就像人类测绘者一样，它可以轻松处理网球场和篮球场的集群、旋转、树木遮挡和不同颜色的路面。它接近但尚未完全达到人类水平的性能。在缺失的场地导入到OSM后，希望它能达到人类水平的性能。
 
-The good news/bad news are the baseball fields. They are much more challenging and interesting than the tennis and basketball courts. First off, they have a large variation in scale. A baseball field for very small children is 5x to 6x smaller than a full sized field for adults. The primary feature to identify a baseball field is the infield diamond, but the infield is only a small part of the actual full baseball field. To map a baseball field, the large featureless grassy outfield must be included. The outfields have to be extrapolated out from the infield. In cases where there is a outfield fence, the neural network does quite well at terminating the outfield at the fence. But most baseball fields don't have an outfield fence or even a painted line. The outfields stretch out until they "bump" into something else, a tree line, a road, or another field while maintaining its wedge shape. Complicating the situation, is that like the neural network, the OSM human mappers are also confused about how to map the outfields without a fence! About 10% of the mapped baseball fields are just the infields. 
+好消息/坏消息是棒球场。它们比网球场和篮球场更具挑战性和趣味性。首先，它们在规模上有很大的变化。幼儿用的棒球场比成人用的标准场地小5到6倍。识别棒球场的主要特征是内场钻石，但内场只是实际完整棒球场的一小部分。要绘制棒球场，必须包括大片无特征的草地外场。外场必须从内场推断出来。在有外场围栏的情况下，神经网络在围栏处终止外场方面做得很好。但大多数棒球场没有外场围栏甚至没有彩绘线。外场向外延伸，直到它们"碰到"其他东西，如树线、道路或其他场地，同时保持其楔形。使情况更复杂的是，像神经网络一样，OSM人类测绘者对于如何绘制没有围栏的外场也感到困惑！约10%的已绘制棒球场只有内场。
 
-The phase 1 neural network had no trouble identifying the infields, but it was struggling with baseball outfields without fences. In the 2,800 identified fields, only the baseball fields with excellent outfield were included. Many missing baseball fields had to be skipped because of poor outfield performance. Hopefully the additional high quality outfield data imported into OSM will improve its performance in this challenging area on the next phase. 
+第1阶段的神经网络在识别内场方面没有问题，但它在处理没有围栏的棒球外场方面存在困难。在2,800个已识别的场地中，只包括了具有出色外场的棒球场。由于外场性能不佳，许多缺失的棒球场不得不被跳过。希望导入OSM的额外高质量外场数据能在下一阶段改进它在这个具有挑战性领域的性能。
 
-![Problem with Baseball Outfields](/sample-images/phase1-baseball-outfieds.png)
+![棒球外场问题](/sample-images/phase1-baseball-outfieds.png)
 
-## Configuration 
+## 配置
 
 - Ubuntu 17.10
-- A Bing key, create a secrets.py file, add in bingKey ="your key"
-- Create a virtual environment python 3.6 
-- In the virtual environment, run "pip install -r requirements.txt"
-- TensorFlow 1.3+ 
+- Bing密钥，创建一个secrets.py文件，添加bingKey ="你的密钥"
+- 创建一个Python 3.6虚拟环境
+- 在虚拟环境中，运行"pip install -r requirements.txt"
+- TensorFlow 1.3+
 - Keras 2.0.8+.
 
